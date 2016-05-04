@@ -2,6 +2,7 @@
 
 drop function if exists FindSequ_core(integer,float8,float8,text);
 begin;
+/*Find the road segment according to given vector in the road network*/
 create or replace function FindSequ_core(vid integer,dist float8, limitlen float8, edgetablename text)
 returns text
 as
@@ -34,7 +35,7 @@ $$
 language 'plpgsql';
 end;
 
-
+/*ITERATION---Find the road segment according to given vector in the road network*/
 drop function if exists FindSequ(integer,float,text);
 begin;
 create or replace function FindSequ(edgeid integer, peri float, edgetablename text)
@@ -50,14 +51,6 @@ timediffer float8;
 res text;
 res2 text;
 begin
-/* 
-if extract(second from  (peri)) is not null then 
-        timediffer:=extract(second from  (peri));
-    end if;
-    if extract(minute from  (peri)) is not null then
-        timediffer:= timediffer+60 *extract(minute from  (peri));
-    end if;
-*/
 
     sqlstr := 'select * from '||edgetablename||' where eid = '||edgeid||';';
     execute sqlstr into rec;
@@ -78,7 +71,9 @@ end;
 
 
 
-
+/*Mapmatching function fitting for the road network*/
+/*tolerance: the buffer allowence desided by the user; 
+Allowtime: if the time interval is longer than given allowtime, the trajectory point is considered to be the start of the new trajectory*/
 Drop function if exists MapMatching_v2(text,text,text,text,float,float) ;
 begin;
 create or replace function MapMatching_v2(roadtablename text,trajtablename text,
@@ -137,6 +132,7 @@ sqlstr_1:='select st_srid(geom) from '||trajtablename||' limit 1';
 execute sqlstr_1 into srid;
 sqlstr_1:='create temp table tmptb as select * from '||restablename||' where 1=0';
 execute sqlstr_1;
+/*Match every point in the trajectory*/
 sqlstr_1:='select *,st_geomfromtext((select st_astext(cast(st_expand(geom,'||tolerance||') as box2d))),'||srid||') as buffer 
 from '||trajtablename||' order by id;';
 --timestr:=quote_literal(allowtime)||' minute';
@@ -145,13 +141,7 @@ for ptrec in execute sqlstr_1
 loop
  ntraj := ntraj+1;
 
-/*sqlstr_2:='select id as id,geom, st_distance(st_geomfromtext('||quote_literal((select st_astext(ptrec.geom)))||','||srid||'), geom) as dist from '||roadtablename||' 
- where st_intersects(geom,st_geomfromtext(('||quote_literal((select st_astext(ptrec.buffer)))||'),'||srid||')) order by dist limit 1';
-    if ntraj=1  then
-
-            execute sqlstr_2 into prevroad;
-end if;*/
---, id,geom,st_distance(st_geomfromtext('||quote_literal((select st_astext(ptrec.geom)))||','||srid||'),_geom) as dist
+/*Find the road segment near the trajectory point within given distance*/
     sqlstr_2:='select eid, geom, st_distance(st_geomfromtext('||quote_literal((select st_astext(ptrec.geom)))||','||srid||'), geom) as dist from '||roadtablename||' 
  where st_intersects(geom,st_geomfromtext(('||quote_literal((select st_astext(ptrec.buffer)))||'),'||srid||')) order by dist';
 
@@ -160,51 +150,17 @@ end if;*/
             prevpt = ptrec;
         end if;
         if ptrec.id=1 or (ptrec.datebynum-prevpt.datebynum) *24*60> allowtime then
-/*           
-    sqlstr_2:='select * from '||trajtablename||' where id='||ptrec.id||'+1;';
-    execute sqlstr_2 into pt;
-
-        select st_x(pt._geom)  into x2;
-        select st_y(pt._geom)  into y2;
-        select st_x(ptrec._geom)  into x1;
-        select st_y(ptrec._geom)  into y1;
-        trajx:=x2-x1;
-        trajy:=y2-y1;
-            select st_geometryn(st_split(roadrec._geom, (st_exteriorring(ptrec.buffer))),2) into tmpLine;
-            select st_startpoint(tmpLine) into p1;
-            select st_endpoint(tmpLine) into p2;
-            select st_x(p1) into x1;
-            select st_y(p1) into y1;
-            select st_x(p2) into x2;
-            select st_y(p2) into y2;
-            roadx:= x2-x1;
-            roady:= y2-y1;
-            direct:=roadx*trajx+roady*trajy;
-            if (trajx=0 and trajy=0) or (roadx=0 and roady=0) then
-            arc:=500;
-            else
-                arc:=(acos(direct/sqrt((roadx*roadx+roady*roady)*(trajx*trajx+trajy*trajy))))*180/3.1415926;
-            end if;
+/* For the first trajectory, directely match it to the nearest road segment
 */
-          -- if arc<=80  or arc=500 then--or arc>=100
+
                 insert into tmptb(id,geom,longitude,latitude,altitude, datebynum, pdate, ptime,roadid) 
 values(ptrec.id,(st_closestpoint(roadrec.geom,ptrec.geom)),ptrec.longitude,ptrec.latitude,ptrec.altitude, ptrec.datebynum, ptrec.pdate, ptrec.ptime,roadrec.eid);
                 prevroad:=roadrec;
                 isExec:=1;
                 exit;
-            --elseif arc>150 then 
-
-             --exit;
-/* elseif (arc>80 and arc<125)  and (select st_distance(ptrec._geom,prevroad._geom))<tolerance then 
-                insert into tmptb(id,_geom, vehiclesimid,gpstime,gpslongitude,gpslatitude,gpsspeed,gpsdirection,passengerstate,readflag,createdate,roadid) 
-values(ptrec.id,(st_closestpoint(prevroad._geom,ptrec._geom)),ptrec.vehiclesimid,ptrec.gpstime,ptrec.gpslongitude,ptrec.gpslatitude,ptrec.gpsspeed,ptrec.gpsdirection,ptrec.passengerstate,ptrec.readflag,ptrec.createdate,prevroad.eid);
-                isExec:=1;
-                exit;
-            else
-            
-            end if;*/
         end if;
-
+/* For the not first trajectory, match it according to the previous segment that been matched
+*/
         if (cast(roadrec.eid as text) in (select a.a from FindSequ(prevroad.eid,((ptrec.datebynum-prevpt.datebynum)*24*60), roadtablename) a(a text))) or (roadrec.eid = prevroad.eid) then
             insert into tmptb(id,geom,longitude,latitude,altitude, datebynum, pdate, ptime,roadid) 
 values(ptrec.id,(st_closestpoint(roadrec.geom,ptrec.geom)), ptrec.longitude,ptrec.latitude,ptrec.altitude, ptrec.datebynum, ptrec.pdate, ptrec.ptime,roadrec.eid);
@@ -212,10 +168,8 @@ values(ptrec.id,(st_closestpoint(roadrec.geom,ptrec.geom)), ptrec.longitude,ptre
                 isExec:=1;
                 exit;
         end if;
-        
-       -- end if;
+
     end loop;
---raise notice 'roadid:%',roadrec.eid;
     if isExec!=1 and (roadrec.eid is not null) then
         select st_astext(ptrec.geom) into respt;
         sqlstr_3:='insert into '||residuetablename||'(id,geom,longitude,latitude,altitude, datebynum, pdate, ptime,reason) 
